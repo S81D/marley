@@ -22,13 +22,35 @@ find_package(Geant4 REQUIRED)
 find_package(HepMC3 REQUIRED)
 
 # MARLEY: prefer its CMake package config; fall back to marley-config.
-# MARLEY's exported target refers to GSL::gsl but does not look for GSL
-# itself, so look for GSL first, and only use the package config if GSL was
-# found (otherwise configuring fails on the missing GSL::gsl target).
-# marley-config carries its own GSL flags.
+# Two cases make find_package(MARLEY) fail hard, so they are checked first:
+#  - MARLEY's exported target refers to GSL::gsl but does not look for GSL
+#    itself, so the package config is only usable if CMake finds GSL.
+#  - A MARLEY build tree (e.g. 'make' in the source directory, which
+#    setup_marley.sh puts on CMAKE_PREFIX_PATH) has a MARLEYConfig.cmake but
+#    no MARLEYTargets.cmake, which is only written by 'make install'.
+# marley-config carries its own include, library and GSL flags.
 find_package(GSL QUIET)
+set(_marley_cfg_dir "")
 if(GSL_FOUND)
-  find_package(MARLEY QUIET)
+  string(REPLACE ":" ";" _env_prefixes "$ENV{CMAKE_PREFIX_PATH}")
+  foreach(_p IN LISTS MARLEY_DIR CMAKE_PREFIX_PATH _env_prefixes)
+    if(_p STREQUAL "" OR _marley_cfg_dir)
+      continue()
+    endif()
+    foreach(_sub "." "lib/cmake/MARLEY" "lib64/cmake/MARLEY")
+      if(NOT _marley_cfg_dir AND EXISTS "${_p}/${_sub}/MARLEYConfig.cmake")
+        if(EXISTS "${_p}/${_sub}/MARLEYTargets.cmake")
+          get_filename_component(_marley_cfg_dir "${_p}/${_sub}" ABSOLUTE)
+        else()
+          message(STATUS "Ignoring incomplete MARLEY package config in "
+            "${_p}/${_sub} (no MARLEYTargets.cmake)")
+        endif()
+      endif()
+    endforeach()
+  endforeach()
+  if(_marley_cfg_dir)
+    find_package(MARLEY CONFIG QUIET PATHS "${_marley_cfg_dir}" NO_DEFAULT_PATH)
+  endif()
 else()
   message(STATUS "GSL not found by CMake: using marley-config for MARLEY")
 endif()
