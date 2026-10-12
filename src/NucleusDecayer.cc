@@ -118,6 +118,18 @@ void marley::NucleusDecayer::process_event( HepMC3::GenEvent& event,
     // de-excitations.
     if ( !native_event ) {
       this->assign_residue_attributes( *residue, gen, Ex, twoJ, p_int );
+
+      // An external code (e.g., the Geant4 interface) may already know, or
+      // may want to choose, the initial spin-parity of the residue. If it
+      // attached "twoJ" and "parity" attributes, use those instead of the
+      // values assigned above. Ex is still inferred from the residue mass.
+      auto twoJ_attr = residue->attribute< HepMC3::IntAttribute >( "twoJ" );
+      auto parity_attr = residue->attribute< HepMC3::IntAttribute >(
+        "parity" );
+      if ( twoJ_attr && parity_attr ) {
+        twoJ = twoJ_attr->value();
+        p_int = parity_attr->value();
+      }
     }
     else {
       // For native MARLEY events, the excitation energy, spin, and parity are
