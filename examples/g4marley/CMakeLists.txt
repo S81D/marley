@@ -7,7 +7,8 @@
 #
 # Needs Geant4 (10.6 tested), MARLEY (g4-deexcitation branch) and HepMC3.
 # Point CMake at them with Geant4_DIR, MARLEY_DIR (or CMAKE_PREFIX_PATH) and
-# HepMC3_DIR as usual.
+# HepMC3_DIR as usual. With no MARLEY_DIR, a working marley-config on PATH
+# (from MARLEY's setup_marley.sh) is used first.
 
 cmake_minimum_required(VERSION 3.16)
 project(g4marley CXX)
@@ -21,17 +22,35 @@ endif()
 find_package(Geant4 REQUIRED)
 find_package(HepMC3 REQUIRED)
 
-# MARLEY: prefer its CMake package config; fall back to marley-config.
-# Two cases make find_package(MARLEY) fail hard, so they are checked first:
-#  - MARLEY's exported target refers to GSL::gsl but does not look for GSL
-#    itself, so the package config is only usable if CMake finds GSL.
-#  - A MARLEY build tree (e.g. 'make' in the source directory, which
-#    setup_marley.sh puts on CMAKE_PREFIX_PATH) has a MARLEYConfig.cmake but
-#    no MARLEYTargets.cmake, which is only written by 'make install'.
-# marley-config carries its own include, library and GSL flags.
-find_package(GSL QUIET)
-set(_marley_cfg_dir "")
-if(GSL_FOUND)
+# MARLEY can be found in two ways:
+#  1. marley-config, which setup_marley.sh puts on PATH (and sets $MARLEY so
+#     it reports the right directories). This is MARLEY's own mechanism for a
+#     source-tree build and carries its include, library, GSL and ROOT flags.
+#     Used unless MARLEY_DIR is given, provided its --libdir really holds
+#     libMARLEY.
+#  2. MARLEY's CMake package config (MARLEY_DIR or CMAKE_PREFIX_PATH). Two
+#     things make find_package(MARLEY) fail hard, so they are checked first:
+#      - The exported target names GSL:: and (if MARLEY was built with ROOT)
+#        ROOT:: targets without looking for those packages itself, so we find
+#        them here and skip the package config if CMake cannot.
+#      - A build tree can hold a MARLEYConfig.cmake with no MARLEYTargets.cmake
+#        beside it; that file is incomplete and is skipped.
+find_program(MARLEY_CONFIG marley-config)
+set(_marley_use_config_script FALSE)
+if(MARLEY_CONFIG AND NOT MARLEY_DIR)
+  execute_process(COMMAND ${MARLEY_CONFIG} --libdir
+    OUTPUT_VARIABLE _marley_libdir OUTPUT_STRIP_TRAILING_WHITESPACE)
+  if(EXISTS "${_marley_libdir}/libMARLEY.so"
+      OR EXISTS "${_marley_libdir}/libMARLEY.dylib")
+    set(_marley_use_config_script TRUE)
+  else()
+    message(STATUS "Ignoring ${MARLEY_CONFIG}: no libMARLEY in its --libdir "
+      "'${_marley_libdir}' (is $MARLEY set to the MARLEY source directory?)")
+  endif()
+endif()
+
+if(NOT _marley_use_config_script)
+  set(_marley_cfg_dir "")
   string(REPLACE ":" ";" _env_prefixes "$ENV{CMAKE_PREFIX_PATH}")
   foreach(_p IN LISTS MARLEY_DIR CMAKE_PREFIX_PATH _env_prefixes)
     if(_p STREQUAL "" OR _marley_cfg_dir)
@@ -48,22 +67,57 @@ if(GSL_FOUND)
       endif()
     endforeach()
   endforeach()
+
   if(_marley_cfg_dir)
-    find_package(MARLEY CONFIG QUIET PATHS "${_marley_cfg_dir}" NO_DEFAULT_PATH)
+    # Find the packages behind the GSL:: and ROOT:: targets MARLEY links to
+    file(READ "${_marley_cfg_dir}/MARLEYTargets.cmake" _marley_targets)
+    set(_marley_missing "")
+    if(_marley_targets MATCHES "GSL::")
+      find_package(GSL QUIET)
+      if(NOT GSL_FOUND)
+        list(APPEND _marley_missing GSL)
+      endif()
+    endif()
+    string(REGEX MATCHALL "ROOT::[A-Za-z0-9_]+" _marley_root_targets
+      "${_marley_targets}")
+    if(_marley_root_targets)
+      list(REMOVE_DUPLICATES _marley_root_targets)
+      # ROOT::Core;ROOT::RIO -> Core;RIO
+      string(REPLACE "ROOT::" "" _marley_root_comps "${_marley_root_targets}")
+      find_package(ROOT QUIET COMPONENTS ${_marley_root_comps})
+      if(NOT ROOT_FOUND)
+        list(APPEND _marley_missing "ROOT (${_marley_root_comps})")
+      endif()
+    endif()
+    if(_marley_missing)
+      message(STATUS "Not using MARLEY package config in ${_marley_cfg_dir}: "
+        "CMake cannot find ${_marley_missing}")
+    else()
+      find_package(MARLEY CONFIG QUIET PATHS "${_marley_cfg_dir}"
+        NO_DEFAULT_PATH)
+    endif()
   endif()
-else()
-  message(STATUS "GSL not found by CMake: using marley-config for MARLEY")
 endif()
+
 if(MARLEY_FOUND)
   message(STATUS "Found MARLEY via CMake config: ${MARLEY_DIR}")
+elseif(NOT MARLEY_CONFIG)
+  message(FATAL_ERROR "MARLEY not found. Source MARLEY's setup_marley.sh "
+    "(puts marley-config on PATH) or pass -DMARLEY_DIR=<dir containing "
+    "MARLEYConfig.cmake and MARLEYTargets.cmake>.")
 else()
-  find_program(MARLEY_CONFIG marley-config REQUIRED)
   execute_process(COMMAND ${MARLEY_CONFIG} --cflags
     OUTPUT_VARIABLE MARLEY_CFLAGS OUTPUT_STRIP_TRAILING_WHITESPACE)
   execute_process(COMMAND ${MARLEY_CONFIG} --libs
     OUTPUT_VARIABLE MARLEY_LIBS OUTPUT_STRIP_TRAILING_WHITESPACE)
   separate_arguments(MARLEY_CFLAGS)
   separate_arguments(MARLEY_LIBS)
+  # CMake adds no build RPATH for plain -L/-l flags (it does for the imported
+  # MARLEY::MARLEY target), so add libMARLEY's directory by hand: the
+  # binaries then run without LD_LIBRARY_PATH pointing at it.
+  execute_process(COMMAND ${MARLEY_CONFIG} --libdir
+    OUTPUT_VARIABLE _marley_libdir OUTPUT_STRIP_TRAILING_WHITESPACE)
+  list(APPEND CMAKE_BUILD_RPATH "${_marley_libdir}")
   message(STATUS "Found MARLEY via marley-config: ${MARLEY_CONFIG}")
 endif()
 
