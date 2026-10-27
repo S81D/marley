@@ -48,6 +48,20 @@ namespace {
   // The size of a tolerable discrepancy (in MeV) between the excitation energy
   // stored in the event record and other (hopefully consistent) versions of it
   constexpr double EX_TOLERANCE = 1e-5; // MeV
+
+  // Returns true if the ground state of the nucleus with the given PDG code
+  // is itself unbound with respect to nucleon emission, i.e., its proton or
+  // neutron separation energy is negative (e.g., 16F -> 15O + p). For these
+  // nuclei, reaching Ex = 0 does not end the de-excitation cascade. Heavier
+  // fragments are left out on purpose: many heavy ground states (e.g., 208Bi)
+  // have a negative alpha separation energy, but their alpha decay is far too
+  // slow to treat here (its Hauser-Feshbach width underflows to zero).
+  bool has_unbound_ground_state( int pdg ) {
+    if ( !marley_utils::is_ion(pdg) ) return false;
+    const auto& mt = marley::MassTable::Instance();
+    return mt.get_fragment_separation_energy( pdg, marley_utils::PROTON ) < 0.
+      || mt.get_fragment_separation_energy( pdg, marley_utils::NEUTRON ) < 0.;
+  }
 }
 
 void marley::NucleusDecayer::process_event( HepMC3::GenEvent& event,
@@ -83,8 +97,15 @@ void marley::NucleusDecayer::process_event( HepMC3::GenEvent& event,
     marley::Parity P( p_int );
 
     // If the residue is in its ground state, then there's nothing for us to do.
-    // Just continue the loop without comment.
-    if ( Ex == 0. || Ex < 1e-6 ) continue;
+    // Just continue the loop without comment. The exception is a nucleus with
+    // an unbound ground state, which must still emit a fragment. For these,
+    // treat |Ex| <= EX_TOLERANCE as the ground state: sub-continuum strength
+    // accumulated there by ContinuumNuclearReaction::reassign_sub_continuum()
+    // comes back with a small round-off error of either sign.
+    bool unbound_gs = std::abs( Ex ) <= EX_TOLERANCE
+      && has_unbound_ground_state( residue->pid() );
+    if ( unbound_gs ) Ex = 0.;
+    else if ( Ex == 0. ) continue;
 
     MARLEY_LOG( DEBUG, "physics.deexcitation" ) << "De-exciting residue PDG "
       << residue->pid() << ": Ex = " << Ex << " MeV, 2J = " << twoJ
@@ -175,8 +196,12 @@ void marley::NucleusDecayer::process_event( HepMC3::GenEvent& event,
       auto second = std::make_shared< HepMC3::GenParticle >();
 
       // The selected level is unbound, so handle its de-excitation using
-      // the Hauser-Feshbach statistical model.
-      while ( continuum && Ex > CONTINUUM_GS_CUTOFF ) {
+      // the Hauser-Feshbach statistical model. A nucleus with an unbound
+      // ground state keeps decaying below CONTINUUM_GS_CUTOFF (down to and
+      // including Ex = 0, where only fragment emission remains open).
+      while ( continuum && ( Ex > CONTINUUM_GS_CUTOFF
+        || has_unbound_ground_state( residue->pid() ) ) )
+      {
 
         auto& sdb = gen.get_structure_db();
 

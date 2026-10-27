@@ -28,6 +28,17 @@
 
 using SubContinuumMode = marley::SubContinuumMode;
 
+namespace {
+  // Excitation energy (MeV) at which the continuum of the residual nucleus
+  // begins. This is normally the "unbound threshold" (the smallest fragment
+  // separation energy). It cannot lie below the ground state, however: if the
+  // ground state itself is unbound (e.g., 16F), the continuum starts at Ex = 0.
+  double continuum_start_Ex( int pdg_d ) {
+    const auto& mt = marley::MassTable::Instance();
+    return std::max( 0., mt.unbound_threshold( pdg_d ) );
+  }
+}
+
 // Initialize the static class member specifying a mapping between strings
 // and SubContinuumMode enum values
 const std::map< SubContinuumMode, std::string >
@@ -55,8 +66,7 @@ marley::ContinuumNuclearReaction::ContinuumNuclearReaction(
   // ionization state of the final atom is already taken into account in
   // the mass stored in md_gs_ (see NuclearReaction.cc for the implementation).
   if ( sc_mode_ != SubContinuumMode::IGNORE ) {
-    const auto& mt = marley::MassTable::Instance();
-    double Ex_ub = mt.unbound_threshold( pdg_d );
+    double Ex_ub = continuum_start_Ex( pdg_d );
     double thresh_unbound = this->get_KEa_threshold( Ex_ub );
 
     KEa_threshold_ = std::max( thresh_unbound, KEa_threshold_ );
@@ -322,9 +332,7 @@ bool marley::ContinuumNuclearReaction::reassign_sub_continuum( double& w,
   double Ex = marley_utils::real_sqrt( Ed*Ed - kappa2 ) - md_gs_;
 
   // Get the "unbound threshold" used to determine the start of the continuum
-  const auto& mt = marley::MassTable::Instance();
-  double unbound_threshold = mt.unbound_threshold( pdg_d_ );
-  if ( unbound_threshold < 0. ) unbound_threshold = 0.;
+  double unbound_threshold = continuum_start_Ex( pdg_d_ );
 
   // If the excitation energy corresponding to the sampled energy transfer
   // is already within the continuum, no special action is needed. Just return
