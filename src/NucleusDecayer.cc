@@ -299,6 +299,17 @@ void marley::NucleusDecayer::process_event( HepMC3::GenEvent& event,
           }
         }
       }
+
+      // If the cascade ended in the continuum (Ex fell below
+      // CONTINUUM_GS_CUTOFF), the last daughter ion still carries the
+      // intermediate status assigned by the exit channel. It is now treated
+      // as being in its ground state, so mark it as a final-state particle,
+      // as DecayScheme::do_cascade() does at the end of a gamma cascade.
+      if ( continuum && residue->status()
+        == marley_hepmc3::NUHEPMC_INTERMEDIATE_RESIDUE_STATUS )
+      {
+        residue->set_status( marley_hepmc3::NUHEPMC_FINAL_STATE_STATUS );
+      }
     }
 
     if ( !continuum ) {
