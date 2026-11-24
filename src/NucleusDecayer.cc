@@ -14,6 +14,9 @@
 // Please respect the MCnet academic usage guidelines. See GUIDELINES
 // or visit https://www.montecarlonet.org/GUIDELINES for details.
 
+// Standard library includes
+#include <cmath>
+
 // HepMC3 includes
 #include "HepMC3/FourVector.h"
 #include "HepMC3/GenEvent.h"
@@ -418,18 +421,37 @@ void marley::NucleusDecayer::assign_residue_attributes(
 
   int starting_twoJ = ( A_is_odd ? 1 : 0 );
   int max_twoJ = starting_twoJ + 12;
+  // Sample the initial spin-parity from the level density rho(Ex, J, Pi) of
+  // the residue. Each candidate (2J, Pi) gets weight rho(Ex, 2J, Pi), so
+  // spin_parities and weights must stay index-aligned.
+  // NOTE: weights was previously left empty. A std::discrete_distribution
+  // built from an empty range has a single outcome (index 0), so every
+  // residue was assigned the lowest spin with positive parity (1/2+ for
+  // odd A, 0+ for even A) regardless of Ex.
   std::vector< std::pair< int, marley::Parity > > spin_parities;
   std::vector< double > weights;
+  double weight_sum = 0.;
   for ( int loop_twoJ = starting_twoJ;
     loop_twoJ <= max_twoJ; loop_twoJ += 2 )
   {
     for ( const bool p : { true, false } ) {
       marley::Parity par( p );
-      // weight stays empty here as spin/parity is assigned manually rather
-      // than drawing from level density
       double w = ld.level_density( Ex, loop_twoJ, par );
       spin_parities.emplace_back( loop_twoJ, par );
+      weights.push_back( w );
+      weight_sum += w;
     }
+  }
+
+  // std::discrete_distribution needs non-negative weights with a positive
+  // sum. The back-shifted Fermi gas density is positive for every Ex, so this
+  // should never trigger; complain loudly rather than silently falling back.
+  // (The comparison is written so that a NaN sum also fails it.)
+  if ( !( weight_sum > 0. ) || !std::isfinite( weight_sum ) ) {
+    throw marley::Error( "Invalid level-density weights (sum = "
+      + std::to_string( weight_sum ) + ") for residue PDG "
+      + std::to_string( pdg ) + " at Ex = " + std::to_string( Ex )
+      + " MeV in marley::NucleusDecayer::assign_residue_attributes()" );
   }
 
   std::discrete_distribution< size_t > sp_dist(
